@@ -35,7 +35,7 @@ smooth experience on similar environments:
 Get started with the script using the following command:
 
 ```bash
-curl -o- https://raw.githubusercontent.com/dev-najahmed/linux-devops-setup/main/devops_setup_script.sh | bash -x 
+curl -sS https://raw.githubusercontent.com/dev-najahmed/linux-devops-setup/main/devops_setup_script.sh | bash 
 ```
 ## 🔍 Options for Installation
 
