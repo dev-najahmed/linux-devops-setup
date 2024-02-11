@@ -89,8 +89,7 @@ install_snap_packages() {
 # Function to install Python packages
 install_python_packages() {
     print_header "🐍 Installing Python packages..."
-    packages=("boto3" "checkov" "fabric" "flask" "jinja2" "paramiko" "pytest" "requests")
-
+    packages=("boto3" "checkov" "fabric" "flask" "jinja2" "paramiko" "pytest" "requests" "lastversion")
 
     for package in "${packages[@]}"; do
         echo -ne "🔧 Installing $package... "
@@ -100,6 +99,29 @@ install_python_packages() {
     done
 }
 
+# Function to install Yor tag package
+install_yor() {
+    print_header "🏗️ Installing Yor tag package..."
+    local current_dir=$(pwd) # Save the current directory
+    local yor_install_dir="yor_installation"
+
+    echo -ne "🔧 Installing Yor... "
+    # Create a directory for Yor installation and move into it
+    mkdir -p "$yor_install_dir" && cd "$yor_install_dir"
+
+    # Execute Yor installation commands
+    (
+        lastversion bridgecrewio/yor -d --assets &> /dev/null &&
+        tar -xzf $(find . -name "*.tar.gz") &> /dev/null &&
+        chmod +x yor &> /dev/null &&
+        sudo mv yor /usr/local/bin &> /dev/null
+    ) & spinner $!
+
+    # Clean up: Move back to the original directory and remove Yor installation directory
+    cd "$current_dir" && rm -rf "$yor_install_dir"
+
+    echo -e "${GREEN}✅ Installed Yor successfully.${NC}"
+}
 
 # Function to install Docker and manage permissions
 configure_docker() {
@@ -142,6 +164,7 @@ main() {
         install_apt_packages
         install_snap_packages
         install_python_packages
+        install_yor
         configure_docker
         generate_ssh_key "${@:2}" # Pass remaining arguments
         echo -e "${GREEN}🎉 All installations and configurations are complete!${NC}"
