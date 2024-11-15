@@ -33,22 +33,48 @@ smooth experience on similar environments:
 
 ## 🛠 Usage
 
-Get started with the script using the following command:
+Get started with the script using the following commands:
 
-```bash
-curl -sS https://raw.githubusercontent.com/dev-najahmed/linux-devops-setup/main/devops_setup_script.sh | sudo bash 
-```
+To run this script directly from GitHub and pass arguments to it, you can use the following command:
+
+`curl -sS https://raw.githubusercontent.com/dev-najahmed/linux-devops-setup/main/devops_setup_script.sh | sudo bash -s -- [arguments]` 
+
+**Explanation:**
+-   The  `-sS`  option tells  `curl`  to run in silent mode but still show errors.
+-   The  `-s`  option for  `bash`  tells it to read commands from standard input.
+-   The  `--`  indicates the end of options for  `bash`  and the beginning of arguments to pass to the script.
+-   Replace  `[arguments]`  with the actual arguments you want to pass to the script.
+
+**Examples:**
+1.  **Install All Modules:**
+    `curl -sS https://raw.githubusercontent.com/dev-najahmed/linux-devops-setup/main/devops_setup_script.sh | sudo bash -s -- --install --all` 
+    
+2.  **Update All Modules:**
+    `curl -sS https://raw.githubusercontent.com/dev-najahmed/linux-devops-setup/main/devops_setup_script.sh | sudo bash -s -- --update --all` 
+    
+3.  **Remove All Modules:**
+  `curl -sS https://raw.githubusercontent.com/dev-najahmed/linux-devops-setup/main/devops_setup_script.sh | sudo bash -s -- --remove --all` 
+    
+4.  **Install Essentials Module:**
+  `curl -sS https://raw.githubusercontent.com/dev-najahmed/linux-devops-setup/main/devops_setup_script.sh | sudo bash -s -- --install --essentials` 
+    
+5.  **Update Specific Package (e.g., Terraform):**
+`curl -sS https://raw.githubusercontent.com/dev-najahmed/linux-devops-setup/main/devops_setup_script.sh | sudo bash -s -- --update terraform` 
+    
+6.  **Remove Specific Packages (e.g., Ansible and Docker):**
+`curl -sS https://raw.githubusercontent.com/dev-najahmed/linux-devops-setup/main/devops_setup_script.sh | sudo bash -s -- --remove ansible docker`
 
 ## 🔍 Options for Installation
 
 Customise your setup with these tailored options:
-
-- `--all` : 🌐 Install everything for a comprehensive setup.
-- `--apt` : 📦 Focus solely on `apt` packages (Linux only).
-- `--brew` : 🍺 Focus solely on `brew` packages (macOS only).
-- `--snap` : 🌀 Utilise snap for specific package installations (Linux only).
-- `--pip3` : 🐍 Prioritise Python packages for your Python environment.
-- `--help` : ❓ Display usage information and helpful tips.
+--install            🚀 Install packages or modules.
+--update             🔄 Update packages or modules.
+--remove, -rm        ❌ Remove packages or modules.
+--all                🌐 Apply action to all modules.
+--essentials         🔑 Apply action to DevOps Essentials.
+--infrastructure     🏗️  Apply action to Infrastructure Tools.
+--additional         🛠️  Apply action to Additional Tools.
+--help               ❓ Display this help message.
 
 ## 📝 Important Notes
 

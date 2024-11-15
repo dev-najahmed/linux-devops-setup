@@ -1,283 +1,492 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -euo pipefail
+IFS=$'\n\t'
 
-# Description: This script prepares a DevOps environment on Linux and macOS,
-# configuring Docker, Python, AWS CLI v2, and installing essential packages. 
-# Offers full or selective setup. Designed for simplicity and efficiency.
+# Description: Main script to set up the DevOps environment.
 
-# Colour variables
+# Color variables
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# Function to display usage information
-usage() {
-    echo -e "${GREEN}Usage:${NC} $0 [options]"
-    echo -e "${YELLOW}Options:${NC}"
-    echo "  --all                🚀 Install all packages and configurations."
-    echo "  --apt                📦 Install essential apt packages (Linux only)."
-    echo "  --brew               📦 Install essential brew packages (macOS only)."
-    echo "  --snap               📦 Install packages via snap (Linux only)."
-    echo "  --pip3               🐍 Install Python packages."
-    echo "  --help               ❓ Display this help message."
-    exit 1
-}
+# Initialize an associative array to store package versions
+declare -gA INSTALLED_PACKAGES
 
 # Function to print section headers
 print_header() {
-    echo -e "${GREEN}${1}${NC}"
+    echo -e "\n${BLUE}==> $1${NC}"
 }
 
-# Spinner function
-spinner() {
-    local pid=$1
-    local delay=0.1
-    local spinstr='-\|/'
-    echo -ne " "
-    while [ "$(ps a | awk '{print $1}' | grep $pid)" ]; do
-        local temp=${spinstr#?}
-        printf "\b${spinstr:0:1}"
-        local spinstr=$temp${spinstr%"$temp"}
-        sleep $delay
-    done
-    printf "\b"
+# Function to check if a command exists
+command_exists() {
+    command -v "$1" >/dev/null 2>&1
 }
 
-# Function to install essential apt packages (Linux)
-install_apt_packages() {
-    if [[ "$OSTYPE" == "linux-gnu"* ]]; then
-        print_header "📦 Installing APT packages..."
-        sudo apt update &> /dev/null && sudo apt upgrade -y &> /dev/null
-        echo -e "${GREEN}✅ System update and upgrade complete.${NC}"
-        packages=(
-            ansible
-            build-essential
-            curl
-            docker-compose
-            docker.io
-            git
-            jq
-            kubectl
-            openssh-client
-            python3
-            python3-pip
-            python3-venv
-            shellcheck
-            zsh
-        )
+# Function to detect OS type
+detect_os() {
+    case "$(uname -s)" in
+        Linux*)     OS_TYPE="linux" ;;
+        Darwin*)    OS_TYPE="macos" ;;
+        *)          echo -e "${RED}Unsupported OS type: $(uname -s)${NC}"; exit 1 ;;
+    esac
+}
 
-        for package in "${packages[@]}"; do
-            echo -ne "🔧 Installing $package... "
-            sudo apt-get install -y $package &> /dev/null &
-            spinner $!
-            echo -e "${GREEN}✅ Installed $package successfully.${NC}"
-        done
-    else
-        echo -e "${YELLOW}🚫 APT is not supported on this OS. Skipping APT package installation.${NC}"
+# Function to get package version
+get_version() {
+    local cmd="$1"
+    local version
+    case "$cmd" in
+        aws)
+            version="$($cmd --version 2>&1 | awk '{print $1" "$2}')"
+            ;;
+        docker)
+            version="$($cmd --version 2>&1 | awk -F', ' '{print $1}')"
+            ;;
+        kubectl)
+            version="$($cmd version --client --short 2>/dev/null | sed 's/Client Version: //')"
+            ;;
+        ansible)
+            version="$($cmd --version 2>&1 | head -n1)"
+            ;;
+        terraform)
+            version="$($cmd version 2>&1 | head -n1)"
+            ;;
+        minikube)
+            version="$($cmd version --short 2>&1)"
+            ;;
+        helm)
+            version="$($cmd version --short 2>&1 | sed 's/^version //')"
+            ;;
+        k9s)
+            version="$($cmd version --short 2>&1 | grep -oE 'Version:.*' | awk '{print $2}')"
+            ;;
+        packer)
+            version="$($cmd version 2>&1 | head -n1)"
+            ;;
+        vault)
+            version="$($cmd version 2>&1 | head -n1)"
+            ;;
+        *)
+            version="$($cmd --version 2>&1 | head -n1)"
+            ;;
+    esac
+    echo "$version"
+}
+
+# Function to handle package actions
+handle_package() {
+    local cmd="$1"
+    local action="$2"
+    local name="${3:-$cmd}"
+
+    case "$action" in
+        install)
+            if ! command_exists "$cmd"; then
+                print_header "Installing $name..."
+                install_package "$cmd"
+                INSTALLED_PACKAGES["$name"]="$(get_version "$cmd")"
+            else
+                INSTALLED_PACKAGES["$name"]="$(get_version "$cmd")"
+                echo -e "${GREEN}✅ $name is already installed. Version: ${INSTALLED_PACKAGES["$name"]}${NC}"
+            fi
+            ;;
+        update)
+            if command_exists "$cmd"; then
+                print_header "Updating $name..."
+                update_package "$cmd"
+                INSTALLED_PACKAGES["$name"]="$(get_version "$cmd")"
+            else
+                echo -e "${YELLOW}⚠️ $name is not installed. Skipping update.${NC}"
+            fi
+            ;;
+        remove)
+            if command_exists "$cmd"; then
+                print_header "Removing $name..."
+                remove_package "$cmd"
+                INSTALLED_PACKAGES["$name"]="Removed"
+            else
+                echo -e "${YELLOW}⚠️ $name is not installed. Nothing to remove.${NC}"
+            fi
+            ;;
+        *)
+            echo -e "${RED}❌ Invalid action: $action${NC}"
+            ;;
+    esac
+}
+
+# Function to install a package
+install_package() {
+    local cmd="$1"
+    if [[ "$OS_TYPE" == "linux" ]]; then
+        sudo apt-get install -y "$cmd"
+    elif [[ "$OS_TYPE" == "macos" ]]; then
+        brew install "$cmd"
     fi
 }
 
-# Function to install essential brew packages (macOS)
-install_brew_packages() {
-    if [[ "$OSTYPE" == "darwin"* ]]; then
-        print_header "📦 Installing Brew packages..."
-        if ! command -v brew &> /dev/null; then
-            echo -e "🍺 Homebrew is not installed. Installing Homebrew..."
-            /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+# Function to update a package
+update_package() {
+    local cmd="$1"
+    if [[ "$OS_TYPE" == "linux" ]]; then
+        sudo apt-get update -qq
+        sudo apt-get install --only-upgrade -y "$cmd"
+    elif [[ "$OS_TYPE" == "macos" ]]; then
+        brew upgrade "$cmd"
+    fi
+}
+
+# Function to remove a package
+remove_package() {
+    local cmd="$1"
+    if [[ "$OS_TYPE" == "linux" ]]; then
+        sudo apt-get remove -y "$cmd"
+    elif [[ "$OS_TYPE" == "macos" ]]; then
+        brew uninstall "$cmd"
+    fi
+}
+
+# Function to calculate Levenshtein distance using awk
+levenshtein_distance() {
+    awk -v str1="$1" -v str2="$2" 'BEGIN{
+        n = length(str1)
+        m = length(str2)
+        for(i=0;i<=n;i++) d[i,0]=i
+        for(j=0;j<=m;j++) d[0,j]=j
+        for(i=1;i<=n;i++){
+            s1i = substr(str1,i,1)
+            for(j=1;j<=m;j++){
+                s2j = substr(str2,j,1)
+                cost = (s1i==s2j)?0:1
+                d[i,j]=min3(d[i-1,j]+1,d[i,j-1]+1,d[i-1,j-1]+cost)
+            }
+        }
+        print d[n,m]
+    }
+    function min3(a,b,c){
+        if(a<=b && a<=c) return a
+        if(b<=a && b<=c) return b
+        return c
+    }'
+}
+
+# Function to suggest correct package name
+suggest_package() {
+    local input_pkg="$1"
+    local min_distance=9999
+    local closest_pkg=""
+    for pkg in "${ALL_PACKAGES[@]}"; do
+        distance=$(levenshtein_distance "$input_pkg" "$pkg")
+        if (( distance < min_distance )); then
+            min_distance=$distance
+            closest_pkg=$pkg
         fi
-        brew update &> /dev/null
-
-        packages=(
-            ansible
-            curl
-            docker
-            docker-compose
-            git
-            jq
-            kubectl
-            openssh
-            python
-            shellcheck
-            zsh
-        )
-
-        for package in "${packages[@]}"; do
-            echo -ne "🔧 Installing $package... "
-            brew install $package &> /dev/null &
-            spinner $!
-            echo -e "${GREEN}✅ Installed $package successfully.${NC}"
-        done
-    else
-        echo -e "${YELLOW}🚫 Brew is not supported on this OS. Skipping Brew package installation.${NC}"
-    fi
-}
-
-# Function to install packages via snap (Linux)
-install_snap_packages() {
-    if [[ "$OSTYPE" == "linux-gnu"* ]]; then
-        print_header "📦 Installing Snap packages..."
-        packages=(terraform-docs tflint helm microk8s)
-
-        for package in "${packages[@]}"; do
-            echo -ne "🔧 Installing $package... "
-            sudo snap install $package &> /dev/null &
-            spinner $!
-            echo -e "${GREEN}✅ Installed $package successfully.${NC}"
-        done
-    else
-        echo -e "${YELLOW}🚫 Snap is not supported on this OS. Skipping Snap package installation.${NC}"
-    fi
-}
-
-# Function to install Python packages
-install_python_packages() {
-    print_header "🐍 Installing Python packages..."
-    packages=("boto3" "checkov" "fabric" "flask" "jinja2" "paramiko" "pytest" "requests" "lastversion")
-
-    for package in "${packages[@]}"; do
-        echo -ne "🔧 Installing $package... "
-        pip3 install $package &> /dev/null &
-        spinner $!
-        echo -e "${GREEN}✅ Installed $package successfully.${NC}"
     done
-}
 
-# Function to install AWS CLI version 2
-install_awscli_v2() {
-    print_header "☁️ Installing AWS CLI version 2..."
-    if [[ "$OSTYPE" == "linux-gnu"* ]]; then
-        curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
-        unzip awscliv2.zip &> /dev/null
-        ./aws/install &> /dev/null
-        rm -rf awscliv2.zip aws/
-    elif [[ "$OSTYPE" == "darwin"* ]]; then
-        curl "https://awscli.amazonaws.com/AWSCLIV2.pkg" -o "AWSCLIV2.pkg"
-        installer -pkg AWSCLIV2.pkg -target / &> /dev/null
-        rm -f AWSCLIV2.pkg
+    if (( min_distance <= 3 )); then
+        echo -e "${YELLOW}Did you mean:${NC}"
+        echo -e "  - $closest_pkg"
     else
-        echo -e "${YELLOW}🚫 AWS CLI v2 installation not supported on this OS.${NC}"
+        echo -e "${YELLOW}No suggestions found for '$input_pkg'.${NC}"
     fi
-    echo -e "${GREEN}✅ AWS CLI version 2 installed successfully.${NC}"
 }
 
-# Function to install Yor tag package
-install_yor() {
-    print_header "🏗️ Installing Yor tag package..."
-    local current_dir=$(pwd) # Save the current directory
-    local yor_install_dir="yor_installation"
+# List of all available packages across all modules
+ALL_PACKAGES=(
+    # DevOps Essentials
+    git python3 docker aws terraform ansible session-manager-plugin kubectl
 
-    echo -ne "🔧 Installing Yor... "
-    # Create a directory for Yor installation and move into it
-    mkdir -p "$yor_install_dir" && cd "$yor_install_dir"
+    # Infrastructure Tools
+    packer vault minikube helm k9s
 
-    # Execute Yor installation commands
-    (
-        lastversion bridgecrewio/yor -d --assets &> /dev/null &&
-        tar -xzf $(find . -name "*.tar.gz") &> /dev/null &&
-        chmod +x yor &> /dev/null &&
-        sudo mv yor /usr/local/bin &> /dev/null
-    ) & spinner $!
+    # Additional Tools
+    trivy checkov node
+)
 
-    # Clean up: Move back to the original directory and remove Yor installation directory
-    cd "$current_dir" && rm -rf "$yor_install_dir"
-
-    echo -e "${GREEN}✅ Installed Yor successfully.${NC}"
-}
-
-# Function to install Docker and manage permissions
-configure_docker() {
-    print_header "🐳 Installing and configuring Docker..."
-
-    if command -v docker &> /dev/null; then
-        echo -e "${YELLOW}⚠️ Docker is already installed at $(which docker). Skipping installation.${NC}"
-    else
-        if [[ "$OSTYPE" == "linux-gnu"* ]]; then
-            sudo apt-get install -y docker.io docker-compose &> /dev/null
-            sudo systemctl start docker
-            sudo systemctl enable docker
-            sudo usermod -aG docker $USER
-        elif [[ "$OSTYPE" == "darwin"* ]]; then
-            brew install --cask docker &> /dev/null
-        else
-            echo -e "${YELLOW}🚫 Docker installation is not supported on this OS.${NC}"
+# Function to find the correct package name
+find_package() {
+    local input_pkg="$1"
+    for pkg in "${ALL_PACKAGES[@]}"; do
+        if [[ "$pkg" == "$input_pkg" ]]; then
+            echo "$pkg"
             return
         fi
-    fi
+    done
+    # If not found, try case-insensitive match
+    for pkg in "${ALL_PACKAGES[@]}"; do
+        if [[ "${pkg,,}" == "${input_pkg,,}" ]]; then
+            echo "$pkg"
+            return
+        fi
+    done
+    # If not found, return empty
+    echo ""
+}
 
-    # Check if Docker application exists on macOS
-    if [[ "$OSTYPE" == "darwin"* && ! -d "/Applications/Docker.app" ]]; then
-        echo -e "${RED}❌ Docker application is not installed in /Applications.${NC}"
-        echo -e "${YELLOW}🚫 Skipping Docker startup. Please install Docker manually or ensure it is located in /Applications.${NC}"
-        return
-    fi
+# Function to display usage information
+usage() {
+    cat <<EOF
+${GREEN}Usage:${NC} $0 [options] [packages...]
+${YELLOW}Options:${NC}
+  --install            🚀 Install packages or modules.
+  --update             🔄 Update packages or modules.
+  --remove, -rm        ❌ Remove packages or modules.
+  --all                🌐 Apply action to all modules.
+  --essentials         🔑 Apply action to DevOps Essentials.
+  --infrastructure     🏗️  Apply action to Infrastructure Tools.
+  --additional         🛠️  Apply action to Additional Tools.
+  --help               ❓ Display this help message.
 
-    # Start Docker on macOS if needed
-    if [[ "$OSTYPE" == "darwin"* ]]; then
-        open /Applications/Docker.app
+${YELLOW}Examples:${NC}
+  $0 --install --all                   # Install all modules.
+  $0 --update terraform                # Update Terraform.
+  $0 --remove ansible docker           # Remove Ansible and Docker.
+  $0 --install --essentials            # Install DevOps Essentials.
+EOF
+    exit 1
+}
 
-        # Wait for Docker to start with a timeout of 60 seconds
-        echo -ne "${GREEN}🔍 Waiting for Docker to start...${NC}"
-        local wait_time=0
-        local timeout=60  # seconds
-
-        while ! docker system info &> /dev/null; do
-            if [[ $wait_time -ge $timeout ]]; then
-                echo -e "${RED}❌ Docker did not start within the expected time. Exiting wait.${NC}"
-                return
+# Function to display the summary of actions
+display_summary() {
+    if [ "${#INSTALLED_PACKAGES[@]}" -gt 0 ]; then
+        echo -e "\n${GREEN}🎉 Action Summary:${NC}"
+        for package in "${!INSTALLED_PACKAGES[@]}"; do
+            local status="${INSTALLED_PACKAGES[$package]}"
+            if [[ "$status" == "Removed" ]]; then
+                echo -e "${GREEN}- $package:${NC} Removed"
+            else
+                echo -e "${GREEN}- $package:${NC} $status"
             fi
-            sleep 2
-            wait_time=$((wait_time + 2))
         done
-        echo -e "${GREEN}✅ Docker is running.${NC}"
+    fi
+}
+
+# Function to display the welcome banner
+welcome_banner() {
+    cat << "EOF"
+oooooooooo.                           .oooooo.                       
+`888'   `Y8b                         d8P'  `Y8b                      
+ 888      888  .ooooo.  oooo    ooo 888      888 oo.ooooo.   .oooo.o 
+ 888      888 d88' `88b  `88.  .8'  888      888  888' `88b d88(  "8 
+ 888      888 888ooo888   `88..8'   888      888  888   888 `"Y88b.  
+ 888     d88' 888    .o    `888'    `88b    d88'  888   888 o.  )88b 
+o888bood8P'   `Y8bod8P'     `8'      `Y8bood8P'   888bod8P' 8""888P' 
+                                                  888                
+                                                 o888o               
+EOF
+    echo -e "${BLUE}Welcome to the DevOps Environment Setup Script!${NC}"
+}
+
+# Function to install, update, or remove DevOps Essentials
+install_devops_essentials() {
+    local action="${1:-install}"  # Default action is "install"
+
+    print_header "${action^} DevOps Essentials..."
+
+    # List of packages in DevOps Essentials
+    local packages=("git" "python3" "docker" "aws" "terraform" "ansible" "session-manager-plugin" "kubectl")
+
+    for pkg in "${packages[@]}"; do
+        handle_package "$pkg" "$action"
+    done
+
+    # Handle Prowler separately
+    handle_prowler "$action"
+
+    # SSH Key Generation (only on install)
+    if [[ "$action" == "install" ]]; then
+        generate_ssh_key
     fi
 
-    # Check Docker version
-    echo -ne "${GREEN}🔍 Docker version: ${NC}"
-    docker --version
+    echo -e "\n${GREEN}🎉 DevOps Essentials ${action^} completed!${NC}"
+}
 
-    echo -e "${YELLOW}📝 NOTE:${NC} You may need to log out and back in or reboot for Docker group changes to take effect."
+# Function to handle Prowler installation, update, or removal
+handle_prowler() {
+    local action="$1"
+    local prowler_dir="/opt/prowler"
+
+    case "$action" in
+        install)
+            if [ ! -d "$prowler_dir" ]; then
+                print_header "Installing Prowler..."
+                sudo mkdir -p "$prowler_dir"
+                sudo git clone -q https://github.com/prowler-cloud/prowler "$prowler_dir"
+                sudo ln -s "$prowler_dir/prowler" /usr/local/bin/prowler
+                echo -e "${GREEN}✅ Prowler installed successfully.${NC}"
+                INSTALLED_PACKAGES["Prowler"]="Installed"
+            else
+                echo -e "${GREEN}✅ Prowler is already installed.${NC}"
+                INSTALLED_PACKAGES["Prowler"]="Installed"
+            fi
+            ;;
+        update)
+            if [ -d "$prowler_dir" ]; then
+                print_header "Updating Prowler..."
+                sudo git -C "$prowler_dir" pull -q
+                echo -e "${GREEN}✅ Prowler updated successfully.${NC}"
+                INSTALLED_PACKAGES["Prowler"]="Updated"
+            else
+                echo -e "${YELLOW}⚠️ Prowler is not installed. Skipping update.${NC}"
+            fi
+            ;;
+        remove)
+            if [ -d "$prowler_dir" ]; then
+                print_header "Removing Prowler..."
+                sudo rm -rf "$prowler_dir"
+                sudo rm -f /usr/local/bin/prowler
+                echo -e "${GREEN}✅ Prowler removed successfully.${NC}"
+                INSTALLED_PACKAGES["Prowler"]="Removed"
+            else
+                echo -e "${YELLOW}⚠️ Prowler is not installed. Nothing to remove.${NC}"
+            fi
+            ;;
+        *)
+            echo -e "${RED}❌ Invalid action: $action${NC}"
+            ;;
+    esac
 }
 
 # Function to generate SSH key pair
 generate_ssh_key() {
-    print_header "🔑 Generating SSH key pair..."
-    if [ -n "$1" ] && [ ! -f ~/.ssh/id_rsa ]; then
-        ssh-keygen -t rsa -b 4096 -C "$1" -f ~/.ssh/id_rsa -N "" &> /dev/null &
-        spinner $!
-        echo -e "${GREEN}✅ SSH key pair generated successfully.${NC}"
+    if [ ! -f ~/.ssh/id_rsa ]; then
+        read -rp "Enter your email for the SSH key: " email
+        if [ -n "$email" ]; then
+            ssh-keygen -t rsa -b 4096 -C "$email" -f ~/.ssh/id_rsa -N ""
+            echo -e "${GREEN}✅ SSH key generated.${NC}"
+        else
+            echo -e "${YELLOW}⚠️ Email not provided. Skipping SSH key generation.${NC}"
+        fi
     else
-        echo -e "${YELLOW}🚫 Email not provided or SSH key already exists. Skipping SSH key generation.${NC}"
+        echo -e "${GREEN}✅ SSH key already exists.${NC}"
     fi
 }
 
-# Main execution logic
+# Install, Update, or Remove Infrastructure Tools
+install_infrastructure_tools() {
+    local action="${1:-install}"  # Default action is "install"
+
+    print_header "${action^} Infrastructure Tools..."
+
+    # List of packages in Infrastructure Tools
+    local packages=("packer" "vault" "minikube" "helm" "k9s")
+
+    for pkg in "${packages[@]}"; do
+        handle_package "$pkg" "$action"
+    done
+
+    echo -e "\n${GREEN}🎉 Infrastructure Tools ${action^} completed!${NC}"
+}
+
+# Install, Update, or Remove Additional Tools
+install_additional_tools() {
+    local action="${1:-install}"  # Default action is "install"
+
+    print_header "${action^} Additional Tools..."
+
+    # List of packages in Additional Tools
+    local packages=("trivy" "checkov" "node")
+
+    for pkg in "${packages[@]}"; do
+        handle_package "$pkg" "$action"
+    done
+
+    echo -e "\n${GREEN}🎉 Additional Tools ${action^} completed!${NC}"
+}
+
+# Main function
 main() {
-    if [[ "$1" == "--help" ]]; then
+    welcome_banner
+    detect_os
+
+    # Default action is install
+    ACTION="install"
+    MODULES=()
+    PACKAGES=()
+
+    # Parse arguments
+    if [[ "$#" -eq 0 ]]; then
         usage
-    elif [[ "$1" == "--all" ]] || [[ -z "$1" ]]; then
-        if [[ "$OSTYPE" == "linux-gnu"* ]]; then
-            install_apt_packages
-            install_snap_packages
-        elif [[ "$OSTYPE" == "darwin"* ]]; then
-            install_brew_packages
-        fi
-        install_python_packages
-        install_awscli_v2
-        install_yor
-        configure_docker
-        generate_ssh_key "${@:2}" # Pass remaining arguments
-        echo -e "${GREEN}🎉 All installations and configurations are complete!${NC}"
     else
         while [[ "$#" -gt 0 ]]; do
-            case $1 in
-                --apt) install_apt_packages; shift ;;
-                --brew) install_brew_packages; shift ;;
-                --snap) install_snap_packages; shift ;;
-                --pip3) install_python_packages; shift ;;
-                *) echo -e "${RED}❌ Unknown option: $1${NC}"; usage; shift ;;
+            case "$1" in
+                --install)
+                    ACTION="install"
+                    ;;
+                --update)
+                    ACTION="update"
+                    ;;
+                --remove|-rm)
+                    ACTION="remove"
+                    ;;
+                --essentials)
+                    MODULES+=("essentials")
+                    ;;
+                --infrastructure)
+                    MODULES+=("infrastructure")
+                    ;;
+                --additional)
+                    MODULES+=("additional")
+                    ;;
+                --all)
+                    MODULES=("essentials" "infrastructure" "additional")
+                    ;;
+                --help)
+                    usage
+                    ;;
+                *)
+                    # Assume any other argument is a package name
+                    PACKAGES+=("$1")
+                    ;;
+            esac
+            shift
+        done
+    fi
+
+    # If both MODULES and PACKAGES are empty, display usage
+    if [[ ${#MODULES[@]} -eq 0 && ${#PACKAGES[@]} -eq 0 ]]; then
+        usage
+    fi
+
+    # Process modules
+    if [[ ${#MODULES[@]} -gt 0 ]]; then
+        for module in "${MODULES[@]}"; do
+            case "$module" in
+                essentials)
+                    install_devops_essentials "$ACTION"
+                    ;;
+                infrastructure)
+                    install_infrastructure_tools "$ACTION"
+                    ;;
+                additional)
+                    install_additional_tools "$ACTION"
+                    ;;
+                *)
+                    echo -e "${RED}❌ Unknown module: $module${NC}"
+                    usage
+                    ;;
             esac
         done
     fi
+
+    # Process individual packages
+    if [[ ${#PACKAGES[@]} -gt 0 ]]; then
+        for pkg in "${PACKAGES[@]}"; do
+            # Find the correct package name
+            matched_pkg=$(find_package "$pkg")
+            if [[ -n "$matched_pkg" ]]; then
+                handle_package "$matched_pkg" "$ACTION"
+            else
+                echo -e "${RED}❌ Package '$pkg' not found.${NC}"
+                suggest_package "$pkg"
+            fi
+        done
+    fi
+
+    display_summary
+    echo -e "\n${GREEN}🎉 All done!${NC}"
 }
 
+# Run the script
 main "$@"
